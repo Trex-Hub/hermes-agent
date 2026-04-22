@@ -1,0 +1,79 @@
+name: Sync Fork and Deploy
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+      timezone: 'Asia/Kolkata'
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: theproblem/hermes-agent:latest
+
+concurrency:
+  group: sync-and-deploy
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_commits: ${{ steps.check.outputs.new_commits }}
+    steps:
+      - name: Get current HEAD
+        id: before
+        run: echo "sha=$(gh api repos/${{ github.repository }}/commits/main --jq '.sha')" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync fork with upstream
+        run: gh repo sync ${{ github.repository }} --source NousResearch/hermes-agent --branch main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for new commits
+        id: check
+        run: |
+          AFTER=$(gh api repos/${{ github.repository }}/commits/main --jq '.sha')
+          if [ "${{ steps.before.outputs.sha }}" != "$AFTER" ]; then
+            echo "new_commits=true" >> $GITHUB_OUTPUT
+          else
+            echo "new_commits=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-and-push:
+    needs: sync
+    if: needs.sync.outputs.new_commits == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          submodules: recursive
+          ref: main
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.DOCKER_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
