@@ -8,6 +8,7 @@ on:
 
 env:
   DOCKER_IMAGE: theproblem/hermes-agent:latest
+  DOCKER_BASE_IMAGE: theproblem/hermes-agent:base
 
 concurrency:
   group: sync-and-deploy
@@ -27,10 +28,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync fork with upstream
-        run: gh repo sync ${{ github.repository }} --source NousResearch/hermes-agent --branch main
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Rebase onto upstream
+        run: |
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch upstream main
+          git rebase upstream/main
+
+      - name: Push rebased branch
+        run: git push origin main --force-with-lease
 
       - name: Check for new commits
         id: check
@@ -67,13 +84,26 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and push base image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
           file: Dockerfile
           push: true
           platforms: linux/amd64
+          tags: ${{ env.DOCKER_BASE_IMAGE }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Build and push overlay image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: Dockerfile.fork
+          push: true
+          platforms: linux/amd64
           tags: ${{ env.DOCKER_IMAGE }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            BASE_IMAGE=${{ env.DOCKER_BASE_IMAGE }}
+          cache-from: type=gha,scope=overlay
+          cache-to: type=gha,mode=max,scope=overlay
