@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      workflows: write
     outputs:
       new_commits: ${{ steps.check.outputs.new_commits }}
     steps:
